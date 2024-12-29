@@ -8,7 +8,50 @@ import whisper
 from typing import Optional, Any
 from pathlib import Path
 import json
-import gc
+
+
+class VideoProcessing:
+    """Processing video files and extract audio in right format"""
+    def __init__(self,
+                 file_name: str,
+                 output_dir: str = "data/whisper_audio"):
+        self.file_name = file_name
+        self.audio_info = self.get_audio_info()
+        self.output_dir = output_dir
+        self.output_path = self.__get_output_path()
+
+    def get_audio_info(self) -> list:
+        audio_info = ffmpeg.probe(filename=self.file_name)
+        info_list = []
+        for stream in audio_info["streams"]:
+            if stream["codec_type"] == "audio":
+                info_list.append({
+                    "codec_name": stream["codec_name"],
+                    "codec_long_name": stream["codec_long_name"],
+                    "sample_rate": stream["sample_rate"],
+                    "channels": stream["channels"] if "channels" in stream else None,
+                    "duration": audio_info["format"]["duration"],
+                    "bit_rate": audio_info["format"]["bit_rate"],
+                })
+        return info_list
+
+    def __get_output_path(self):
+        os.makedirs(self.output_dir, exist_ok=True)
+        output_path = os.path.join(
+            self.output_dir,
+            f"{os.path.splitext(os.path.basename(self.file_name))[0]}.wav"
+        )
+        return output_path
+
+    def convert_and_save_audio(self):
+        _input = ffmpeg.input(filename=self.file_name)
+        _output = ffmpeg.output(_input.audio,
+                                filename=self.output_path,
+                                acodec='pcm_s16le',  # 16-битные сэмплы
+                                ac=1,  # моно звук
+                                ar=16000,  # частота дискретизации 16кГц
+                                )
+        ffmpeg.run(_output)
 
 
 class BaseModelASR(ABC):
@@ -287,18 +330,6 @@ def print_torch_cuda_info():
     print("Версия cuda:",torch.version.cuda)
     print(f"Allocated: {torch.cuda.memory_allocated(0)/1024**3:.2f}GB")
     print(f"Cached: {torch.cuda.memory_reserved(0)/1024**3:.2f}GB")
-
-
-def clear_gpu_memory():
-    """Очистка памяти GPU"""
-    if torch.cuda.is_available():
-        # Очищаем кэш PyTorch CUDA
-        torch.cuda.synchronize()
-        torch.cuda.ipc_collect()
-        torch.cuda.empty_cache()
-        # Запускаем сборщик мусора Python
-        gc.collect()
-        print("GPU память очищена")
 
 
 # переписать функцию для принятия json
