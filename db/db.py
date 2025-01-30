@@ -1,8 +1,11 @@
+import json
 from contextlib import contextmanager
+from typing import Generator
+
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
-from typing import Generator
-from models import Base
+
+from .models import AudioFiles, Base
 
 DATABASE_URL = "sqlite:///sqlite_db.db"
 
@@ -23,3 +26,15 @@ class DatabaseSession:
             yield session
         finally:
             session.close()
+
+def add_all_objs(db: DatabaseSession, objs: list):
+    with db.get_session() as session:
+        session.add_all(objs)
+
+def add_segment_from_results(db: DatabaseSession, results: list):
+    for result in results:
+        with db.get_session() as session:
+            file_in_db = session.query(AudioFiles).filter(AudioFiles.name == result["file_name"]).first()
+            file_id = file_in_db.id
+            json_dict = json.loads(result["json"])
+

@@ -1,13 +1,16 @@
-import ffmpeg
-from abc import ABC, abstractmethod
-import gigaam
-from dotenv import load_dotenv
+import json
 import os
+from abc import ABC, abstractmethod
+from pathlib import Path
+from typing import Any, Optional
+
+import ffmpeg
 import torch
 import whisper
-from typing import Optional, Any
-from pathlib import Path
-import json
+from dotenv import load_dotenv
+from huggingface_hub import HfApi
+
+import gigaam
 
 
 class VideoProcessing:
@@ -32,6 +35,7 @@ class VideoProcessing:
                     "channels": stream["channels"] if "channels" in stream else None,
                     "duration": audio_info["format"]["duration"],
                     "bit_rate": audio_info["format"]["bit_rate"],
+                    "size": audio_info["format"]["size"]
                 })
         return info_list
 
@@ -116,7 +120,8 @@ class BaseModelASR(ABC):
         """
         pass
 
-    def cleanup(self):
+    @abstractmethod
+    def cleanup_model(self):
         """
         Очищает память от загруженной модели и вычислений
         :return:
@@ -131,6 +136,22 @@ class BaseModelASR(ABC):
                     torch.cuda.empty_cache()
 
             print("Модель успешно выгружена из памяти")
+
+        except Exception as e:
+            print(f"Ошибка при очистке памяти: {e}")
+            raise
+
+    @abstractmethod
+    def cleanup_cache(self):
+        """
+        Очищает память от вычислений
+        :return:
+        """
+        try:
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+            print("Кэш очищен")
 
         except Exception as e:
             print(f"Ошибка при очистке памяти: {e}")
@@ -180,11 +201,19 @@ class Whisper(BaseModelASR):
             print(f"Start transcribing {audio_path}")
             result = self.model.transcribe(str(audio_path), **transcribe_options)
             print("Transcribing completed")
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
             return result
 
         except Exception as e:
             print(f"Error during transcription: {e}")
             raise
+
+        finally:
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
 
     def get_json(self, transcription_result: dict):
         if not transcription_result or "segments" not in transcription_result:
@@ -198,6 +227,12 @@ class Whisper(BaseModelASR):
                 "text": segment["text"].strip()
             }
         return json.dumps(json_obj, ensure_ascii=False, indent=2)
+
+    def cleanup_model(self):
+        super().cleanup_model()
+
+    def cleanup_cache(self):
+        super().cleanup_cache()
 
 
 class GigaAM(BaseModelASR):
@@ -216,7 +251,7 @@ class GigaAM(BaseModelASR):
         :param model_name: название модели GigaAM ("ctc", "rnnt")
         """
         try:
-            if model_name not in self.available_models:
+            if self.model_name not in self.available_models:
                 raise ValueError(
                     f"Недопустимое название модели. Доступные модели: {self.available_models}"
                 )
@@ -274,7 +309,7 @@ class GigaAM(BaseModelASR):
             print("Set env 'HF_TOKEN' for transcribing")
         return token
 
-    def cleanup(self):
+    def cleanup_model(self):
         """
         Очищает память от загруженной модели и вычислений с учетом архитектуры GigaAM
         """
@@ -302,8 +337,7 @@ class GigaAM(BaseModelASR):
                     torch.cuda.empty_cache()
                     torch.cuda.synchronize()
 
-                # Переносим на CPU и удаляем
-                self.model.cpu()
+                # Удаляем
                 del self.model
                 self.model = None
                 self._is_loaded = False
@@ -319,6 +353,46 @@ class GigaAM(BaseModelASR):
         except Exception as e:
             print(f"Ошибка при очистке памяти: {e}")
             raise
+
+        def cleanup_cache(self):
+            super().cleanup_cache()
+    
+    def cleanup_cache(self):
+        super().cleanup_cache()
+
+
+class HuggingFaceAPI:
+    def __init__(self):
+        load_dotenv()
+        self.token = os.getenv('HF_TOKEN')
+        self.api = HfApi()
+
+    def get_files_list_from_repo(self, repo_id='alexsilverman/super-tanya'):
+        try:
+            files = self.api.list_repo_files(
+                repo_id=repo_id,
+                token=self.token,
+                repo_type="dataset"
+            )
+            return files
+        except Exception as e:
+            print(e)
+
+    def download_file(self, filename, repo_id='alexsilverman/super-tanya', output_dir='whisper_audio'):
+        self.api.hf_hub_download(
+            repo_id=repo_id,
+            repo_type="dataset",
+            filename=filename,
+            token=self.token,
+            local_dir=output_dir
+        )
+
+    def download_wav_files(self):
+        files = self.get_files_list_from_repo()
+        for file in files:
+            if file.endswith(('.wav')):  # фильтр по расширению
+                print(f"Загружаю {file}...")
+                self.download_file(file)
 
 
 def print_torch_cuda_info():
@@ -354,4 +428,3 @@ def split_audio(input_audio, output_dir, segments):
             print(f"Created segment {i}: {segment['text'][:50]}...")
         except ffmpeg.Error as e:
             print(f"Error processing segment {i}: {str(e)}")
-

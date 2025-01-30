@@ -28,7 +28,7 @@ def process(num_gpu: int):
 
     files = []
     '''
-    Указать папку с файлами!
+    Указать папку с файлами!!!
     '''
     for file in os.listdir(Path.cwd()):
         if file.endswith(('.wav',)):
@@ -62,12 +62,13 @@ if __name__ == '__main__':
     start_time = time.time()
     results = process(1)
     end_time = time.time()
+    result_time = end_time-start_time
     '''
     Указать имя файла для каждой модели
     '''
     with open('data.json', 'w') as f:
         json.dump(results, f, ensure_ascii=False, indent=2)
-    print(end_time-start_time)
+    print(result_time)
 
 
 
